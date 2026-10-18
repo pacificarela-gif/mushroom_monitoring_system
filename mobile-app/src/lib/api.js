@@ -99,6 +99,8 @@ async function apiWrite(method, path, body, { signal, timeoutMs } = {}) {
 
 export function apiPut(path, body, opts) { return apiWrite('PUT', path, body, opts); }
 export function apiPost(path, body, opts) { return apiWrite('POST', path, body, opts); }
+export function apiUrl(path) { return buildUrl(path); }
+export function apiHeaders(extra) { return buildHeaders(extra); }
 
 /** Probe a typed base URL (does not use the saved cache). */
 export async function pingServer(baseUrl, { timeoutMs = 8000 } = {}) {

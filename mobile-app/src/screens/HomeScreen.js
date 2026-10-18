@@ -7,12 +7,14 @@ import StatusCard from '../components/StatusCard';
 import { AppHeader, HeaderIcon, navigateRoot } from '../components/ui';
 import { useSharedNurseryLive } from '../lib/NurseryLiveContext';
 import { palette } from '../theme/palette';
+import { useScale } from '../theme/scale';
 import { cardShadow, useTheme } from '../theme/useTheme';
 
 const HERO = require('../../assets/hero-mushrooms.png');
 
 export default function HomeScreen({ deviceId, unreadCount = 0 }) {
   const t = useTheme();
+  const { dp, sp, pad, columns } = useScale();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { derived, loading } = useSharedNurseryLive();
@@ -26,7 +28,10 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
     );
   }
 
-  const climateStatus = derived.anyBad ? 'bad' : derived.allGood ? 'good' : 'warn';
+  const actions = derived.actions || { lines: [], cards: {}, overridden: [], interventions: [], anyManual: false };
+  const co2Card = actions.cards?.co2 || {};
+  const humCard = actions.cards?.humidity || {};
+  const tempCard = actions.cards?.temperature || {};
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -44,7 +49,7 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
         }
       />
       <ScrollView
-        contentContainerStyle={[styles.container, { paddingBottom: 28 + insets.bottom }]}
+        contentContainerStyle={[styles.container, { paddingHorizontal: pad, paddingBottom: dp(28) + insets.bottom, gap: dp(14) }]}
         showsVerticalScrollIndicator={false}
       >
         <StatusCard
@@ -52,17 +57,34 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
           lastSeenText={derived.lastSeenText}
           allGood={derived.allGood}
           anyBad={derived.anyBad}
+          detail={actions.lines[0] || null}
         />
 
-        {derived.anyManual ? (
-          <Text style={[styles.overrideNote, { color: t.sub }]}>
-            Manual override is on — fans will not follow the target ranges until you turn override off.
-          </Text>
-        ) : null}
+        {actions.anyManual ? (
+          <View style={[styles.modeCard, { backgroundColor: t.isDark ? '#3A1A1A' : '#FDECEC', borderColor: palette.bad, borderRadius: dp(16), padding: dp(14), gap: dp(4) }]}>
+            <View style={styles.modeHead}>
+              <Ionicons name="warning" size={dp(18)} color={palette.bad} />
+              <Text style={{ color: palette.bad, fontSize: sp(15), fontWeight: '800' }}>Manual override</Text>
+            </View>
+            <Text style={{ color: t.isDark ? '#F3C1C4' : '#7A2430', fontSize: sp(13), lineHeight: sp(18), fontWeight: '600' }}>
+              Automatic control is blocked. {actions.overridden.join(' · ')}
+            </Text>
+          </View>
+        ) : (
+          <View style={[styles.modeCard, { backgroundColor: t.mint, borderRadius: dp(16), padding: dp(14), gap: dp(4) }]}>
+            <View style={styles.modeHead}>
+              <Ionicons name="sync" size={dp(18)} color={palette.forestGreen} />
+              <Text style={{ color: t.text, fontSize: sp(15), fontWeight: '800' }}>Automated mode</Text>
+            </View>
+            <Text style={{ color: t.sub, fontSize: sp(13), lineHeight: sp(18), fontWeight: '600' }}>
+              {actions.interventions.join(' · ')}
+            </Text>
+          </View>
+        )}
 
-        <Text style={[styles.section, { color: t.text }]}>Current Conditions</Text>
-        <View style={styles.grid}>
-          <View style={styles.gridRow}>
+        <Text style={{ color: t.text, fontSize: sp(18), fontWeight: '800', marginTop: dp(4) }}>Current Conditions</Text>
+        <View style={{ gap: dp(12) }}>
+          <View style={[styles.gridRow, { gap: dp(12) }]}>
             <MetricCard
               title="CO₂"
               icon="co2"
@@ -70,6 +92,8 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
               unit="ppm"
               status={derived.co2Status}
               subtitle={`Target: ${derived.co2Lo} – ${derived.co2Hi} ppm`}
+              action={co2Card.action}
+              manual={co2Card.manual}
             />
             <MetricCard
               title="Humidity"
@@ -78,25 +102,51 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
               unit="%"
               status={derived.humStatus}
               subtitle={`Target: ${derived.humLo.toFixed(0)} – ${derived.humHi.toFixed(0)} %`}
+              action={humCard.action}
+              manual={humCard.manual}
             />
+            {columns >= 3 ? (
+              <MetricCard
+                title="Temperature"
+                icon="temperature"
+                value={derived.tempC != null ? derived.tempC.toFixed(1) : null}
+                unit="°C"
+                status={derived.tempStatus}
+                subtitle={`Target: ${derived.tempLo.toFixed(0)} – ${derived.tempHi.toFixed(0)} °C`}
+                action={tempCard.action}
+                manual={tempCard.manual}
+              />
+            ) : null}
           </View>
-          <View style={styles.gridRow}>
-            <MetricCard
-              title="Temperature"
-              icon="temperature"
-              value={derived.tempC != null ? derived.tempC.toFixed(1) : null}
-              unit="°C"
-              status={derived.tempStatus}
-              subtitle={`Target: ${derived.tempLo.toFixed(0)} – ${derived.tempHi.toFixed(0)} °C`}
-            />
-            <MetricCard
-              title="Climate"
-              icon="climate"
-              value={derived.anyBad ? 'Check' : derived.allGood ? 'Stable' : 'Watch'}
-              status={climateStatus}
-              subtitle={derived.allGood ? 'Growing well' : 'Keep an eye on targets'}
-            />
-          </View>
+          {columns < 3 ? (
+            <View style={[styles.gridRow, { gap: dp(12) }]}>
+              <MetricCard
+                title="Temperature"
+                icon="temperature"
+                value={derived.tempC != null ? derived.tempC.toFixed(1) : null}
+                unit="°C"
+                status={derived.tempStatus}
+                subtitle={`Target: ${derived.tempLo.toFixed(0)} – ${derived.tempHi.toFixed(0)} °C`}
+                action={tempCard.action}
+                manual={tempCard.manual}
+              />
+            </View>
+          ) : null}
+        </View>
+
+        <View style={[styles.alertPanel, { backgroundColor: t.surface, borderRadius: dp(18), padding: dp(14), gap: dp(8) }, cardShadow(t.isDark)]}>
+          <Text style={{ color: t.text, fontSize: sp(15), fontWeight: '800' }}>Climate actions</Text>
+          {actions.lines.length ? (
+            actions.lines.map((line) => (
+              <Text key={line} style={{ color: palette.bad, fontSize: sp(13), lineHeight: sp(18), fontWeight: '700' }}>
+                {line}
+              </Text>
+            ))
+          ) : (
+            <Text style={{ color: t.sub, fontSize: sp(13), lineHeight: sp(18), fontWeight: '600' }}>
+              All readings are inside the target range.
+            </Text>
+          )}
         </View>
 
         <View style={[styles.trend, { backgroundColor: t.mint }]}>
@@ -104,13 +154,12 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
             <Ionicons name="leaf" size={18} color={palette.forestGreen} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.trendTitle, { color: t.text }]}>Environment Trend</Text>
-            <Text style={[styles.trendSub, { color: t.sub }]}>
-              {derived.allGood
-                ? 'Conditions are stable for the last 24 hours.'
-                : derived.anyBad
-                  ? 'One or more readings are outside the target range.'
-                  : 'Readings are near the edge of the target range.'}
+            <Text style={[styles.trendTitle, { color: t.text, fontSize: sp(15) }]}>Environment Trend</Text>
+            <Text style={[styles.trendSub, { color: t.sub, fontSize: sp(12), lineHeight: sp(16) }]}>
+              {actions.lines[0]
+                || (derived.allGood
+                  ? 'Conditions are stable for the last 24 hours.'
+                  : 'Readings are near the edge of the target range.')}
             </Text>
           </View>
         </View>
@@ -124,11 +173,11 @@ export default function HomeScreen({ deviceId, unreadCount = 0 }) {
 }
 
 const styles = StyleSheet.create({
-  container: { paddingHorizontal: 20, gap: 14 },
-  overrideNote: { fontSize: 12, fontWeight: '600', lineHeight: 16 },
-  section: { fontSize: 18, fontWeight: '800', marginTop: 4 },
-  grid: { gap: 12 },
-  gridRow: { flexDirection: 'row', gap: 12 },
+  container: {},
+  modeCard: { borderWidth: 1, borderColor: 'transparent' },
+  modeHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gridRow: { flexDirection: 'row' },
+  alertPanel: {},
   trend: {
     flexDirection: 'row',
     alignItems: 'center',

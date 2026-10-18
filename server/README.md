@@ -109,6 +109,11 @@ Tighten rules before any real deployment.
 |----------|---------|
 | `PORT` | Listen port (default `3000`) |
 | `API_KEY` | If set, all `/api/*` routes require header `X-API-Key: <value>` |
+| `SMTP_HOST` | SMTP server for breach email (SendGrid: `smtp.sendgrid.net`) |
+| `SMTP_PORT` | SMTP port (default `587`; `465` turns on TLS) |
+| `SMTP_USER` / `SMTP_PASS` | SMTP login. SendGrid uses user `apikey` and the API key as the password |
+| `SMTP_FROM` | From address. Must be a verified sender on the SMTP provider |
+| `SMTP_URL` | Optional single-string transport URL instead of the fields above |
 
 ## Endpoints
 
@@ -121,7 +126,11 @@ Tighten rules before any real deployment.
 | GET | `/api/devices/:id/live` | Latest telemetry (in-memory on server) |
 | GET | `/api/devices/:id/history24h` | Last 24h points (in-memory; backfilled from RTDB) |
 | GET | `/api/devices/:id/alerts` | Alert log (in-memory + RTDB) |
-| POST | `/api/devices/:id/pushTokens` | Register Expo push token for this device |
+| POST | `/api/devices/:id/pushTokens` | Register Expo push token (`channelId` selects the Android alert channel) |
+| GET | `/api/devices/:id/report` | 24-hour min/max/avg, actuator duty cycle, and event log |
+| GET | `/api/devices/:id/report.csv` | Same report as CSV |
+| GET | `/api/devices/:id/report.pdf` | Same report as PDF |
+| GET / PUT | `/api/devices/:id/notify` | Email address for alerts after 10 continuous minutes out of range |
 
 ## Control JSON (`GET` `/api/devices/:id/control`)
 

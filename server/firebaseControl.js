@@ -407,6 +407,7 @@ async function upsertPushToken(deviceId, tokenInfo) {
     await set(ref(db, `devices/${deviceId}/pushTokens/${safeKey}`), {
       token: tokenInfo.token,
       platform: typeof tokenInfo.platform === 'string' ? tokenInfo.platform : null,
+      channelId: typeof tokenInfo.channelId === 'string' ? tokenInfo.channelId : null,
       updatedAtMs: Date.now(),
     });
   } catch (e) {
@@ -430,7 +431,11 @@ async function getPushTokens(deviceId) {
     if (!v || typeof v !== 'object') return [];
     return Object.values(v)
       .filter((x) => x && typeof x === 'object' && typeof x.token === 'string' && x.token.length > 0)
-      .map((x) => ({ token: x.token, platform: typeof x.platform === 'string' ? x.platform : undefined }));
+      .map((x) => ({
+        token: x.token,
+        platform: typeof x.platform === 'string' ? x.platform : undefined,
+        channelId: typeof x.channelId === 'string' ? x.channelId : undefined,
+      }));
   } catch (e) {
     if (isPermissionDenied(e)) disableRtdb('permission_denied');
     return [];
@@ -453,6 +458,64 @@ async function removePushTokenKey(deviceId, tokenKey) {
   }
 }
 
+async function pushEvent(deviceId, event) {
+  if (!deviceId || !event || typeof event !== 'object' || !canUseRtdb()) return;
+  const { db } = await getFirebaseContext();
+  if (!canUseRtdb()) return;
+  try {
+    await push(ref(db, `devices/${deviceId}/events`), event);
+  } catch (e) {
+    if (isPermissionDenied(e)) disableRtdb('permission_denied');
+  }
+}
+
+async function loadRecentEvents(deviceId, sinceMs) {
+  if (!deviceId || !canUseRtdb()) return [];
+  const { db } = await getFirebaseContext();
+  if (!canUseRtdb()) return [];
+  try {
+    const snap = await get(ref(db, `devices/${deviceId}/events`));
+    if (!snap.exists()) return [];
+    const v = snap.val();
+    if (!v || typeof v !== 'object') return [];
+    const cutoff = typeof sinceMs === 'number' ? sinceMs : 0;
+    return Object.values(v)
+      .filter((p) => p && typeof p === 'object' && typeof p.tsMs === 'number' && p.tsMs >= cutoff)
+      .sort((a, b) => a.tsMs - b.tsMs);
+  } catch (e) {
+    if (isPermissionDenied(e)) disableRtdb('permission_denied');
+    return [];
+  }
+}
+
+async function loadNotify(deviceId) {
+  if (!deviceId || !canUseRtdb()) return null;
+  const { db } = await getFirebaseContext();
+  if (!canUseRtdb()) return null;
+  try {
+    const snap = await get(ref(db, `devices/${deviceId}/notify`));
+    if (!snap.exists()) return null;
+    const v = snap.val();
+    return v && typeof v === 'object' ? v : null;
+  } catch (e) {
+    if (isPermissionDenied(e)) disableRtdb('permission_denied');
+    return null;
+  }
+}
+
+async function saveNotify(deviceId, notify) {
+  if (!deviceId || !notify || !canUseRtdb()) return false;
+  const { db } = await getFirebaseContext();
+  if (!canUseRtdb()) return false;
+  try {
+    await set(ref(db, `devices/${deviceId}/notify`), notify);
+    return true;
+  } catch (e) {
+    if (isPermissionDenied(e)) disableRtdb('permission_denied');
+    return false;
+  }
+}
+
 module.exports = {
   warmup,
   defaultControl,
@@ -469,6 +532,10 @@ module.exports = {
   upsertPushToken,
   getPushTokens,
   removePushTokenKey,
+  pushEvent,
+  loadRecentEvents,
+  loadNotify,
+  saveNotify,
   isFirebaseReady,
   isRtdbDisabled: () => rtdbDisabled,
   databaseURL: firebaseConfig.databaseURL,

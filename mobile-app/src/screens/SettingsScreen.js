@@ -21,6 +21,7 @@ import { DEFAULT_SERVER_BASE_URL, useServerConfig } from '../lib/config';
 import { FEATURES } from '../lib/features';
 import { changeLocalCreds, getLocalCreds } from '../lib/localAuth';
 import { useSharedNurseryLive } from '../lib/NurseryLiveContext';
+import AlertSettingsCard from '../components/AlertSettingsCard';
 import { palette } from '../theme/palette';
 import { cardShadow, useTheme } from '../theme/useTheme';
 
@@ -406,6 +407,7 @@ export default function SettingsScreen({ deviceIdState, onSignOut }) {
               onPress={() => navigateRoot(navigation, 'Alerts')}
             />
           </View>
+          <AlertSettingsCard deviceId={deviceId} />
 
           <Text style={[styles.section, { color: t.text }]}>2. Phone connection</Text>
           <Text style={[styles.hint, { color: t.sub }]}>

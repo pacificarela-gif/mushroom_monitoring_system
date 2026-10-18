@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -8,7 +8,6 @@ import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useDeviceId } from './src/lib/useDeviceId';
-import { registerForPushNotificationsAsync } from './src/lib/pushNotifications';
 import { useUnreadAlerts } from './src/lib/useUnreadAlerts';
 import HomeScreen from './src/screens/HomeScreen';
 import ControlScreen from './src/screens/ControlScreen';
@@ -16,6 +15,7 @@ import HistoryScreen from './src/screens/HistoryScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import AlertSoundHost from './src/components/AlertSoundHost';
 import { useLocalSession } from './src/lib/localAuth';
 import { NurseryLiveProvider } from './src/lib/NurseryLiveContext';
 import { palette } from './src/theme/palette';
@@ -43,6 +43,7 @@ function MainTabs({ deviceIdState, unread, session }) {
 
   return (
     <NurseryLiveProvider deviceId={deviceIdState.deviceId}>
+    <AlertSoundHost deviceId={deviceIdState.deviceId} />
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
@@ -89,11 +90,6 @@ export default function App() {
   const deviceIdState = useDeviceId();
   const unread = useUnreadAlerts(deviceIdState.deviceId);
   const session = useLocalSession();
-
-  useEffect(() => {
-    if (!deviceIdState.deviceId) return;
-    registerForPushNotificationsAsync(deviceIdState.deviceId).catch(() => {});
-  }, [deviceIdState.deviceId]);
 
   const theme = useMemo(() => {
     const base = scheme === 'dark' ? DarkTheme : DefaultTheme;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { describeDashboard } from './actions';
 import { devicePath, useApiValue } from './api';
-import { FEATURES } from './features';
 import {
   DEFAULT_CO2_MAX_PPM,
   DEFAULT_CO2_MIN_PPM,
@@ -74,8 +74,35 @@ export function useNurseryLive(deviceId) {
       c.manualOverride ||
       c.manualIntakeFanOverride ||
       c.manualSprinklerOverride ||
-      (FEATURES.heater && c.manualHeaterOverride)
+      c.manualHeaterOverride
     );
+
+    const actions = describeDashboard({
+      tempC,
+      humPct,
+      co2ppm,
+      tempLo,
+      tempHi,
+      humLo,
+      humHi,
+      co2Lo,
+      co2Hi,
+      tempStatus,
+      humStatus,
+      co2Status,
+      fanOn,
+      intakeFanOn,
+      sprinklerOn,
+      heaterOn,
+      manualOverride: !!c.manualOverride,
+      manualFanOn: !!c.manualFanOn,
+      manualIntakeFanOverride: !!c.manualIntakeFanOverride,
+      manualIntakeFanOn: !!c.manualIntakeFanOn,
+      manualSprinklerOverride: !!c.manualSprinklerOverride,
+      manualSprinklerOn: !!c.manualSprinklerOn,
+      manualHeaterOverride: !!c.manualHeaterOverride,
+      manualHeaterOn: !!c.manualHeaterOn,
+    });
 
     return {
       tempC,
@@ -97,6 +124,7 @@ export function useNurseryLive(deviceId) {
       sprinklerOn,
       heaterOn,
       anyManual,
+      actions,
       online: age != null && age < ONLINE_WINDOW_MS,
       lastSeenText:
         age != null ? `Last update: ${formatAge(age)}` : 'Last update: (waiting for device heartbeat)',

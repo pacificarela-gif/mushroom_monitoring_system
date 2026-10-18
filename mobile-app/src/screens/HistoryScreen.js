@@ -11,9 +11,11 @@ import {
 import { LineChart } from 'react-native-gifted-charts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppHeader, PillTabs } from '../components/ui';
+import DailyReportPanel from '../components/DailyReportPanel';
 import { devicePath, useApiValue } from '../lib/api';
 import { useSharedNurseryLive } from '../lib/NurseryLiveContext';
 import { palette } from '../theme/palette';
+import { useScale } from '../theme/scale';
 import { cardShadow, useTheme } from '../theme/useTheme';
 
 function normalizePoints(raw, field, range) {
@@ -90,6 +92,7 @@ const METRICS = {
 
 export default function HistoryScreen({ deviceId }) {
   const t = useTheme();
+  const { pad, dp } = useScale();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const history = useApiValue(deviceId ? devicePath(deviceId, 'history24h') : null, { intervalMs: 15000 });
@@ -120,7 +123,7 @@ export default function HistoryScreen({ deviceId }) {
     [data, metric, spec.floor]
   );
   const latest = data.length ? data[data.length - 1].value : null;
-  const chartWidth = Math.max(220, Math.floor(windowWidth - 20 * 2 - 16 * 2));
+  const chartWidth = Math.max(220, Math.floor(windowWidth - pad * 2 - dp(16) * 2));
 
   const inRangeNote = (() => {
     if (metric === 'co2') {
@@ -142,7 +145,7 @@ export default function HistoryScreen({ deviceId }) {
     <View style={{ flex: 1, backgroundColor: t.bg }}>
       <AppHeader title="Environmental Charts" />
       <ScrollView
-        contentContainerStyle={[styles.container, { paddingBottom: 28 + insets.bottom }]}
+        contentContainerStyle={[styles.container, { paddingHorizontal: pad, paddingBottom: 28 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
       >
         <PillTabs
@@ -255,13 +258,15 @@ export default function HistoryScreen({ deviceId }) {
           <Text style={{ fontSize: 16, color: palette.forestGreen }}>🌿</Text>
           <Text style={[styles.noteText, { color: t.sub }]}>{inRangeNote}</Text>
         </View>
+
+        <DailyReportPanel deviceId={deviceId} />
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { paddingHorizontal: 20, gap: 14 },
+  container: { gap: 14 },
   card: { borderRadius: 22, padding: 16, overflow: 'hidden' },
   chartHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   chartTitle: { fontSize: 15, fontWeight: '800' },

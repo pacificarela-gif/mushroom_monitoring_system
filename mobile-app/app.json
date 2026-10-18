@@ -41,7 +41,19 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-audio",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/chime.wav",
+            "./assets/sounds/alarm.wav"
+          ]
+        }
+      ],
+      "expo-asset",
+      "expo-font"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

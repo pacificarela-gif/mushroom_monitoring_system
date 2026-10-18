@@ -11,7 +11,7 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export async function registerForPushNotificationsAsync(deviceId) {
+export async function registerForPushNotificationsAsync(deviceId, channelId) {
   if (!deviceId) return null;
 
   // Expo Go on Android does NOT support remote push tokens (SDK 53+).
@@ -45,6 +45,7 @@ export async function registerForPushNotificationsAsync(deviceId) {
   await apiPost(devicePath(deviceId, 'pushTokens'), {
     token,
     platform: Platform.OS,
+    channelId: typeof channelId === 'string' ? channelId : 'nursery-critical',
   });
 
   return token;

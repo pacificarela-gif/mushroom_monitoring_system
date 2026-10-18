@@ -2,6 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const fb = require('./firebaseControl');
 const PDFDocument = require('pdfkit');
+const { breachMessage, listBreaches } = require('./actions');
+const { buildDailyReport, reportToCsv, writeReportPdf } = require('./reports');
+const { noteBreaches, dispatchBreachEmails } = require('./breach');
+const { smtpConfigured } = require('./mailer');
 
 const app = express();
 if (process.env.RENDER) {
@@ -27,15 +31,22 @@ const HISTORY_DELTA_CO2_PPM = 50;
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const ONLINE_WINDOW_MS = 30 * 1000;
 
-async function sendExpoPush(tokens, title, body, data = {}) {
+async function sendExpoPush(tokens, title, body, data = {}, channelId) {
   if (!tokens.length) return;
-  const messages = tokens.map((t) => ({
-    to: t,
-    sound: 'default',
-    title,
-    body,
-    data,
-  }));
+  const messages = tokens.map((entry) => {
+    const token = typeof entry === 'string' ? entry : entry.token;
+    const channel = (entry && entry.channelId) || channelId;
+    const msg = {
+      to: token,
+      sound: 'default',
+      title,
+      body,
+      data,
+      priority: 'high',
+    };
+    if (channel) msg.channelId = channel;
+    return msg;
+  });
 
   // Chunk to stay under Expo limits.
   const chunks = [];
@@ -79,36 +90,6 @@ function bandsFrom(d) {
       max: typeof c.humFanOnPct === 'number' ? c.humFanOnPct : null,
     },
   };
-}
-
-// Emits alerts when a reading falls outside its target range (high or low).
-// `type` values: co2, co2_low, temp, temp_low, hum, hum_low.
-function thresholdAlerts(d, b) {
-  const out = [];
-  const tempC = typeof b.tempC === 'number' ? b.tempC : null;
-  const humPct = typeof b.humPct === 'number' ? b.humPct : null;
-  const co2ppm = typeof b.co2ppm === 'number' ? b.co2ppm : null;
-  const bands = bandsFrom(d);
-
-  if (bands.co2.max != null && co2ppm != null && co2ppm > 0 && co2ppm >= bands.co2.max) {
-    out.push({ type: 'co2', value: co2ppm, thr: bands.co2.max });
-  } else if (bands.co2.min != null && co2ppm != null && co2ppm > 0 && co2ppm <= bands.co2.min) {
-    out.push({ type: 'co2_low', value: co2ppm, thr: bands.co2.min });
-  }
-
-  if (bands.temp.max != null && tempC != null && tempC >= bands.temp.max) {
-    out.push({ type: 'temp', value: tempC, thr: bands.temp.max });
-  } else if (bands.temp.min != null && tempC != null && tempC <= bands.temp.min) {
-    out.push({ type: 'temp_low', value: tempC, thr: bands.temp.min });
-  }
-
-  if (bands.hum.max != null && humPct != null && humPct >= bands.hum.max) {
-    out.push({ type: 'hum', value: humPct, thr: bands.hum.max });
-  } else if (bands.hum.min != null && humPct != null && humPct <= bands.hum.min) {
-    out.push({ type: 'hum_low', value: humPct, thr: bands.hum.min });
-  }
-
-  return out;
 }
 
 // For each metric, report whether it's currently out-of-band (above OR below)
@@ -233,6 +214,10 @@ function getOrCreate(deviceId) {
       alerts: {},
       pushTokens: {},
       alertState: {},
+      events: [],
+      notify: { email: '', enabled: false },
+      breach: {},
+      anomalyAt: {},
     };
     devices.set(deviceId, state);
     state.controlHydratePromise = hydrateControlFromDb(deviceId, state);
@@ -260,6 +245,26 @@ function getOrCreate(deviceId) {
         state.historyBackfilled = true;
         console.warn(`[history] backfill failed device=${deviceId}:`, e.message);
       });
+
+    const eventSince = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    fb.loadRecentEvents(deviceId, eventSince)
+      .then((rows) => {
+        if (!rows.length) return;
+        const seen = new Set(state.events.map((e) => `${e.tsMs}|${e.kind}|${e.message}`));
+        for (const row of rows) {
+          const key = `${row.tsMs}|${row.kind}|${row.message}`;
+          if (!seen.has(key)) state.events.push(row);
+        }
+        state.events.sort((a, b) => a.tsMs - b.tsMs);
+      })
+      .catch((e) => console.warn(`[events] backfill failed device=${deviceId}:`, e.message));
+
+    fb.loadNotify(deviceId)
+      .then((raw) => {
+        if (!raw) return;
+        state.notify = normalizeNotify(raw);
+      })
+      .catch((e) => console.warn(`[notify] load failed device=${deviceId}:`, e.message));
   }
   fb.ensureControlSubscription(deviceId, (id, incoming) => {
     const d = devices.get(id);
@@ -324,6 +329,7 @@ app.get('/health', (req, res) => {
     firebaseControl: fb.isFirebaseReady(),
     firebaseMode: fb.isRtdbDisabled() ? 'memory-only' : 'web-sdk+anonymous',
     firebaseDatabaseURL: fb.databaseURL || null,
+    emailConfigured: smtpConfigured(),
   });
 });
 
@@ -488,10 +494,12 @@ app.put('/api/devices/:deviceId/control', auth, async (req, res) => {
   const deviceId = req.params.deviceId;
   const d = getOrCreate(deviceId);
   const b = req.body || {};
+  const beforeControl = { ...d.control };
 
   // Memory is authoritative for the ESP32 + app. Firebase is a best-effort mirror.
   fb.applyControlSnapshot(d.control, b);
   const now = Date.now();
+  logOverrideTransitions(deviceId, d, beforeControl, d.control, now);
   d.control.updatedAtMs = now;
   d.controlUpdatedAtMs = now;
 
@@ -607,7 +615,11 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
   }
 
   // Push notifications when thresholds are reached (with cooldown).
-  const alerts = thresholdAlerts(d, b);
+  const alerts = listBreaches(b, d.control).map((hit) => ({
+    type: hit.direction === 'low' ? `${hit.metric}_low` : hit.metric,
+    value: hit.value,
+    thr: hit.threshold,
+  }));
   if (alerts.length) {
     console.log(
       `[alert] ${new Date(now).toISOString()} device=${deviceId} ` +
@@ -634,12 +646,7 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
           }
           const title = 'Smart Monitoring Alert';
           const direction = isLow ? 'low' : 'high';
-          const body =
-            key === 'co2'
-              ? `CO₂ ${direction}: ${Math.round(a.value)} ppm (${isLow ? 'min' : 'max'} ${a.thr})`
-              : key === 'temp'
-                ? `Temp ${direction}: ${a.value.toFixed(1)} °C (${isLow ? 'min' : 'max'} ${a.thr})`
-                : `Humidity ${direction}: ${a.value.toFixed(0)}% (${isLow ? 'min' : 'max'} ${a.thr})`;
+          const body = breachMessage(key, direction, a.value, b, d.control);
           // Save alert entry for the app to display (even if push tokens are missing).
           recordAlert(deviceId, d, {
             tsMs: now,
@@ -651,7 +658,13 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
           }).then(() => console.log(`[alert] device=${deviceId} appended type=${a.type}`));
 
           if (pushTokens.length) {
-            await sendExpoPush(pushTokens, title, body, { deviceId, type: a.type, value: a.value, threshold: a.thr });
+            await sendExpoPush(
+              pushTokens,
+              title,
+              body,
+              { deviceId, type: a.type, value: a.value, threshold: a.thr, severity: 'critical' },
+              'nursery-critical'
+            );
           }
           d.alertState[key] = { above: true, lastSentMs: now };
         }
@@ -692,7 +705,13 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
           });
 
           if (pushTokens.length && now - prev.lastSentMs >= ALERT_COOLDOWN_MS) {
-            await sendExpoPush(pushTokens, title, body, { deviceId, type: `${key}_normal`, value: cur.value, threshold: cur.thr });
+            await sendExpoPush(
+              pushTokens,
+              title,
+              body,
+              { deviceId, type: `${key}_normal`, value: cur.value, threshold: cur.thr, severity: 'warning' },
+              'nursery-warning'
+            );
           }
 
           d.alertState[key] = { above: false, lastSentMs: now };
@@ -700,6 +719,10 @@ app.post('/api/devices/:deviceId/telemetry', auth, async (req, res) => {
       })
       .catch((e) => console.warn('[push] recovery-alert loop failed:', e.message));
   }
+
+  noteSensorAnomalies(deviceId, d, candidate, prev, now);
+  const dueBreaches = noteBreaches(d.breach, b, d.control, now);
+  dispatchBreachEmails(deviceId, d.notify, dueBreaches, b);
 
   const client =
     req.ip ||
@@ -764,11 +787,101 @@ function recordAlert(deviceId, d, alert) {
 }
 
 function tokensForDevice(d, fromFb) {
-  const mem = Object.values(d.pushTokens || {})
-    .filter((x) => x && typeof x.token === 'string' && x.token.length > 0)
-    .map((x) => x.token);
-  const fbTokens = (fromFb || []).map((x) => x.token).filter(Boolean);
-  return [...new Set([...mem, ...fbTokens])];
+  const map = new Map();
+  const add = (token, channelId) => {
+    if (typeof token !== 'string' || !token) return;
+    const prev = map.get(token);
+    map.set(token, { token, channelId: channelId || prev?.channelId });
+  };
+  Object.values(d.pushTokens || {}).forEach((x) => {
+    if (x && typeof x.token === 'string') add(x.token, x.channelId);
+  });
+  (fromFb || []).forEach((x) => add(x.token, x.channelId));
+  return [...map.values()];
+}
+
+const EVENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const ANOMALY_COOLDOWN_MS = 10 * 60 * 1000;
+
+function normalizeNotify(raw) {
+  const email = typeof raw?.email === 'string' ? raw.email.trim().slice(0, 200) : '';
+  const enabled = raw?.enabled === true && email.includes('@');
+  return { email, enabled };
+}
+
+function recordEvent(deviceId, d, event) {
+  d.events.push(event);
+  const cutoff = Date.now() - EVENT_WINDOW_MS;
+  d.events = d.events.filter((e) => e && e.tsMs >= cutoff).slice(-400);
+  fb.pushEvent(deviceId, event).catch((e) => {
+    console.warn('[events] append failed:', e.message);
+  });
+}
+
+function logOverrideTransitions(deviceId, d, before, after, now) {
+  const rows = [
+    ['manualOverride', 'manualFanOn', 'exhaust fan'],
+    ['manualIntakeFanOverride', 'manualIntakeFanOn', 'intake fan'],
+    ['manualSprinklerOverride', 'manualSprinklerOn', 'misting pump'],
+    ['manualHeaterOverride', 'manualHeaterOn', 'heater'],
+  ];
+  for (const [flag, onKey, label] of rows) {
+    const wasOn = !!before[flag];
+    const nowOn = !!after[flag];
+    const wasForced = !!before[onKey];
+    const forced = !!after[onKey];
+    if (wasOn === nowOn && wasForced === forced) continue;
+    let message;
+    if (nowOn && !wasOn) message = `Manual override on: ${label} forced ${forced ? 'ON' : 'OFF'}`;
+    else if (!nowOn && wasOn) message = `Manual override off: ${label} returned to automatic`;
+    else if (nowOn) message = `Manual override: ${label} forced ${forced ? 'ON' : 'OFF'}`;
+    else continue;
+    recordEvent(deviceId, d, { tsMs: now, kind: 'override', message });
+  }
+}
+
+function noteJump(deviceId, d, key, prev, curr, limit, unit, now) {
+  if (typeof prev !== 'number' || typeof curr !== 'number') {
+    if (typeof prev === 'number' && curr == null) {
+      const stamp = d.anomalyAt[`${key}-lost`] || 0;
+      if (now - stamp < ANOMALY_COOLDOWN_MS) return;
+      d.anomalyAt[`${key}-lost`] = now;
+      recordEvent(deviceId, d, {
+        tsMs: now,
+        kind: 'anomaly',
+        message: `Sensor anomaly: ${key} reading lost`,
+      });
+    }
+    return;
+  }
+  if (Math.abs(curr - prev) < limit) return;
+  const stamp = d.anomalyAt[key] || 0;
+  if (now - stamp < ANOMALY_COOLDOWN_MS) return;
+  d.anomalyAt[key] = now;
+  recordEvent(deviceId, d, {
+    tsMs: now,
+    kind: 'anomaly',
+    message: `Sensor anomaly: ${key} jumped from ${prev} to ${curr}${unit}`,
+  });
+}
+
+function noteSensorAnomalies(deviceId, d, candidate, prev, now) {
+  if (!prev) return;
+  noteJump(deviceId, d, 'temperature', prev.tempC, candidate.tempC, 8, '°C', now);
+  noteJump(deviceId, d, 'humidity', prev.humPct, candidate.humPct, 30, '%', now);
+  noteJump(deviceId, d, 'CO₂', prev.co2ppm, candidate.co2ppm, 1500, ' ppm', now);
+}
+
+function reportFor(deviceId, d, req) {
+  const hours = Number(req.query.hours);
+  const windowMs = Number.isFinite(hours) ? Math.min(168, Math.max(1, hours)) * 60 * 60 * 1000 : HISTORY_WINDOW_MS;
+  return buildDailyReport({
+    history: d.history,
+    alerts: d.alerts,
+    events: d.events,
+    now: Date.now(),
+    windowMs,
+  });
 }
 
 app.get('/api/devices/:deviceId/alerts', auth, async (req, res) => {
@@ -792,20 +905,82 @@ app.post('/api/devices/:deviceId/pushTokens', auth, async (req, res) => {
     return res.status(400).json({ error: 'token (string) is required' });
   }
   const key = String(b.token).replace(/[.#$\[\]/]/g, '_');
+  const channelId = typeof b.channelId === 'string' ? b.channelId : undefined;
   d.pushTokens[key] = {
     token: b.token,
     platform: typeof b.platform === 'string' ? b.platform : undefined,
+    channelId,
     updatedAtMs: Date.now(),
   };
   try {
     await fb.upsertPushToken(deviceId, {
       token: b.token,
       platform: typeof b.platform === 'string' ? b.platform : undefined,
+      channelId,
     });
   } catch (e) {
     console.warn('[pushTokens] firebase upsert failed (kept in memory):', e.message);
   }
   res.json({ ok: true, key });
+});
+
+async function ensureAlerts(d, deviceId) {
+  if (Object.keys(d.alerts).length > 0) return;
+  try {
+    const fromFb = await fb.readAlerts(deviceId);
+    if (fromFb && typeof fromFb === 'object') d.alerts = { ...fromFb };
+  } catch (e) {
+    console.warn('[alerts] read failed:', e.message);
+  }
+}
+
+app.get('/api/devices/:deviceId/report', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  await ensureAlerts(d, deviceId);
+  res.json(reportFor(deviceId, d, req));
+});
+
+app.get('/api/devices/:deviceId/report.csv', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  await ensureAlerts(d, deviceId);
+  const csv = reportToCsv(reportFor(deviceId, d, req), deviceId);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="nursery-report-${deviceId}.csv"`);
+  res.send(csv);
+});
+
+app.get('/api/devices/:deviceId/report.pdf', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  await ensureAlerts(d, deviceId);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="nursery-report-${deviceId}.pdf"`);
+  writeReportPdf(res, reportFor(deviceId, d, req), deviceId);
+});
+
+app.get('/api/devices/:deviceId/notify', auth, (req, res) => {
+  const d = getOrCreate(req.params.deviceId);
+  res.json({ ...d.notify, smtpConfigured: smtpConfigured() });
+});
+
+app.put('/api/devices/:deviceId/notify', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  const body = req.body || {};
+  const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : d.notify.email;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+  const enabled = typeof body.enabled === 'boolean' ? body.enabled : d.notify.enabled;
+  d.notify = { email, enabled: enabled && !!email };
+  try {
+    await fb.saveNotify(deviceId, d.notify);
+  } catch (e) {
+    console.warn('[notify] save failed:', e.message);
+  }
+  res.json({ ...d.notify, smtpConfigured: smtpConfigured() });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
