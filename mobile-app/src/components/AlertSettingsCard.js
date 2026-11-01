@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { apiGet, apiPut, devicePath } from '../lib/api';
+import { apiGet, apiPost, apiPut, devicePath } from '../lib/api';
 import { loadAlertPrefs, saveAlertPrefs } from '../lib/alertPrefs';
 import { configureAlertChannels, criticalChannelId, playAlertSound } from '../lib/alertSounds';
 import { registerForPushNotificationsAsync } from '../lib/pushNotifications';
@@ -33,6 +33,7 @@ export default function AlertSettingsCard({ deviceId }) {
   const [emailOn, setEmailOn] = useState(false);
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [savingEmail, setSavingEmail] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
 
   useEffect(() => {
     loadAlertPrefs().then(setPrefs).catch(() => {});
@@ -78,12 +79,30 @@ export default function AlertSettingsCard({ deviceId }) {
         'Email alerts saved',
         saved?.smtpConfigured
           ? 'The server will email this address after 10 minutes outside the target range.'
-          : 'Saved on the server. SMTP is not configured yet, so messages will not send until SMTP_HOST and SMTP_FROM are set.'
+          : 'Saved on the server. SMTP is not configured yet, so messages will not send until SMTP_HOST, SMTP_USER, SMTP_PASS and SMTP_FROM are set.'
       );
     } catch (e) {
       Alert.alert('Save failed', String(e?.message || e));
     } finally {
       setSavingEmail(false);
+    }
+  }
+
+  async function sendTest() {
+    const trimmed = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      Alert.alert('Test email', 'Enter a valid address first.');
+      return;
+    }
+    setSendingTest(true);
+    try {
+      const res = await apiPost(devicePath(deviceId, 'notify/test'), { email: trimmed });
+      setSmtpConfigured(res?.smtpConfigured !== false);
+      Alert.alert('Test email sent', `Check ${res?.sentTo || trimmed} — including the spam folder.`);
+    } catch (e) {
+      Alert.alert('Test email failed', String(e?.message || e));
+    } finally {
+      setSendingTest(false);
     }
   }
 
@@ -151,12 +170,21 @@ export default function AlertSettingsCard({ deviceId }) {
         />
         {!smtpConfigured ? (
           <Text style={{ color: t.sub, fontSize: sp(12) }}>
-            The API process also needs SMTP_HOST and SMTP_FROM before mail can leave the server.
+            The server still needs SMTP_HOST, SMTP_USER, SMTP_PASS and SMTP_FROM before mail can leave.
           </Text>
         ) : null}
         <Pressable onPress={saveEmail} disabled={savingEmail} style={[styles.save, { opacity: savingEmail ? 0.6 : 1 }]}>
           <Text style={{ color: 'white', fontWeight: '800', fontSize: sp(14) }}>
             {savingEmail ? 'Saving…' : 'Save email alerts'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={sendTest}
+          disabled={sendingTest}
+          style={[styles.test, { borderColor: palette.forestGreen, opacity: sendingTest ? 0.6 : 1 }]}
+        >
+          <Text style={{ color: palette.forestGreen, fontWeight: '800', fontSize: sp(14) }}>
+            {sendingTest ? 'Sending…' : 'Send test email'}
           </Text>
         </Pressable>
       </View>
@@ -187,5 +215,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
     marginTop: 4,
+  },
+  test: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
 });

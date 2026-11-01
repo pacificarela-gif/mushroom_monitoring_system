@@ -109,11 +109,21 @@ Tighten rules before any real deployment.
 |----------|---------|
 | `PORT` | Listen port (default `3000`) |
 | `API_KEY` | If set, all `/api/*` routes require header `X-API-Key: <value>` |
-| `SMTP_HOST` | SMTP server for breach email (SendGrid: `smtp.sendgrid.net`) |
+| `SMTP_HOST` | SMTP server for breach email (Brevo: `smtp-relay.brevo.com`) |
 | `SMTP_PORT` | SMTP port (default `587`; `465` turns on TLS) |
-| `SMTP_USER` / `SMTP_PASS` | SMTP login. SendGrid uses user `apikey` and the API key as the password |
-| `SMTP_FROM` | From address. Must be a verified sender on the SMTP provider |
+| `SMTP_USER` / `SMTP_PASS` | Brevo SMTP login and **SMTP key** (the key is the password; not your Brevo API key) |
+| `SMTP_FROM` | From address. Must be a verified sender in Brevo |
 | `SMTP_URL` | Optional single-string transport URL instead of the fields above |
+| `SMTP_SECURE` | Set to `1` to force implicit TLS (automatic when the port is `465`) |
+
+### Breach email (Brevo)
+
+1. In Brevo go to **SMTP** (`app.brevo.com/settings/keys/smtp`) and copy the **SMTP login** and generate an **SMTP key**. The key is the password — there is no separate password, and do not use an API key.
+2. Verify a sender or authenticate your domain under **Senders & IP**.
+3. Fill `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` in `server/.env` (local) or the Render dashboard (production).
+4. Restart the server and check `GET /health` for `"emailConfigured": true`.
+
+Locally, `server/.env` is loaded automatically. Set the recipient per device with `PUT /api/devices/:id/notify`.
 
 ## Endpoints
 
@@ -131,6 +141,7 @@ Tighten rules before any real deployment.
 | GET | `/api/devices/:id/report.csv` | Same report as CSV |
 | GET | `/api/devices/:id/report.pdf` | Same report as PDF |
 | GET / PUT | `/api/devices/:id/notify` | Email address for alerts after 10 continuous minutes out of range |
+| POST | `/api/devices/:id/notify/test` | Send a test email to the saved address (or `email` in the body) |
 
 ## Control JSON (`GET` `/api/devices/:id/control`)
 

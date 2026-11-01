@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fb = require('./firebaseControl');
@@ -5,7 +6,7 @@ const PDFDocument = require('pdfkit');
 const { breachMessage, listBreaches } = require('./actions');
 const { buildDailyReport, reportToCsv, writeReportPdf } = require('./reports');
 const { noteBreaches, dispatchBreachEmails } = require('./breach');
-const { smtpConfigured } = require('./mailer');
+const { smtpConfigured, sendTestEmail } = require('./mailer');
 
 const app = express();
 if (process.env.RENDER) {
@@ -981,6 +982,32 @@ app.put('/api/devices/:deviceId/notify', auth, async (req, res) => {
     console.warn('[notify] save failed:', e.message);
   }
   res.json({ ...d.notify, smtpConfigured: smtpConfigured() });
+});
+
+app.post('/api/devices/:deviceId/notify/test', auth, async (req, res) => {
+  const deviceId = req.params.deviceId;
+  const d = getOrCreate(deviceId);
+  const body = req.body || {};
+  const requested = typeof body.email === 'string' ? body.email.trim() : '';
+  // Allow testing an address before it is saved; fall back to the saved one.
+  const to = requested || d.notify.email;
+  if (!to) {
+    return res.status(400).json({ error: 'Add an email address first.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+  if (!smtpConfigured()) {
+    return res.status(503).json({ error: 'SMTP is not configured on the server.', smtpConfigured: false });
+  }
+  try {
+    await sendTestEmail({ to, deviceId });
+    console.log(`[email] device=${deviceId} test email sent to=${to}`);
+    sendJson(res, 200, { ok: true, sentTo: to, smtpConfigured: true });
+  } catch (e) {
+    console.warn(`[email] device=${deviceId} test send failed:`, e.message);
+    sendJson(res, 502, { error: `Could not send test email: ${e.message}`, smtpConfigured: true });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {

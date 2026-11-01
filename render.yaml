@@ -15,3 +15,14 @@ services:
       # Set a secret in the Render Dashboard (ESP32 + app send header X-API-Key).
       - key: API_KEY
         sync: false
+      # Brevo SMTP for breach emails. Fill these in the Render Dashboard.
+      - key: SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
