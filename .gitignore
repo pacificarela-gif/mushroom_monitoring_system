@@ -26,12 +26,12 @@ Thumbs.db
 Desktop.ini
 
 # Secrets
-
+.env
 **/*.local
 secrets.json
 serviceAccountKey.json
 
 # Node server
 server/node_modules/
-
+server/.env
 
